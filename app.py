@@ -19,22 +19,16 @@ def setup_chinese_font():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     font_path = os.path.join(base_dir, "assets", "fonts", "NotoSansSC-Regular.ttf")
 
-    st.write("Font path:", font_path)
-    st.write("Font exists:", os.path.exists(font_path))
-
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
         font_prop = fm.FontProperties(fname=font_path)
         font_name = font_prop.get_name()
 
-        st.write("Loaded font name:", font_name)
 
         mpl.rcParams["font.family"] = [font_name]
         mpl.rcParams["font.sans-serif"] = [font_name]
         mpl.rcParams["axes.unicode_minus"] = False
 
-        # 验证 matplotlib 实际找到的字体
-        st.write("Matplotlib resolved font:", fm.findfont(font_name, fallback_to_default=False))
     else:
         st.warning("Custom font file not found. Falling back to default font.")
         mpl.rcParams["font.family"] = ["DejaVu Sans"]

@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import os
+import matplotlib.font_manager as fm
 import time
 
 from config import KALMAN_PARAMS, DEFAULT_TICKER, DEFAULT_END_DATE
@@ -13,14 +15,33 @@ from utils.kalman_model import optimize_kalman_parameters, run_kalman_filter
 # ==========================================
 # Configure Matplotlib for Chinese Support
 # ==========================================
-mpl.rcParams["font.sans-serif"] = [
-    "Arial Unicode MS",
-    "PingFang SC",
-    "SimHei",
-    "Microsoft YaHei",
-    "sans-serif",
-]
-mpl.rcParams["axes.unicode_minus"] = False
+def setup_chinese_font():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    font_path = os.path.join(base_dir, "assets", "fonts", "NotoSansSC-Regular.ttf")
+
+    st.write("Font path:", font_path)
+    st.write("Font exists:", os.path.exists(font_path))
+
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_prop = fm.FontProperties(fname=font_path)
+        font_name = font_prop.get_name()
+
+        st.write("Loaded font name:", font_name)
+
+        mpl.rcParams["font.family"] = [font_name]
+        mpl.rcParams["font.sans-serif"] = [font_name]
+        mpl.rcParams["axes.unicode_minus"] = False
+
+        # 验证 matplotlib 实际找到的字体
+        st.write("Matplotlib resolved font:", fm.findfont(font_name, fallback_to_default=False))
+    else:
+        st.warning("Custom font file not found. Falling back to default font.")
+        mpl.rcParams["font.family"] = ["DejaVu Sans"]
+        mpl.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+        mpl.rcParams["axes.unicode_minus"] = False
+
+setup_chinese_font()
 
 
 # ==========================================
@@ -167,7 +188,12 @@ with st.sidebar.form(key="model_config_form"):
             format="%.2f",
             help="调整模型对交易量冲击的最高容忍度。推荐数值为1，5，10。"
         )
-
+        params["Q_scale_cap"] = st.number_input(
+            "趋势信任度上限",
+            value=float(params["Q_scale_cap"]),
+            format="%.2f",
+            help="调整模型对短期趋势信任度的上限。推荐数值为1，3，5。"
+        )
         params["slippage"] = st.number_input(
             "交易滑点",
             value=float(params["slippage"]),
@@ -175,12 +201,6 @@ with st.sidebar.form(key="model_config_form"):
             help="回测模拟交易滑点，默认为 0.001，即 0.1%。"
         )
 
-        params["Q_scale_cap"] = st.number_input(
-            "趋势信任度上限",
-            value=float(params["Q_scale_cap"]),
-            format="%.2f",
-            help="调整模型对短期趋势信任度的上限。推荐数值为1，3，5。"
-        )
 
     run_model = st.form_submit_button("运行模型", type="primary")
 

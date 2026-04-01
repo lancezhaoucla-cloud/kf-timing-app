@@ -111,8 +111,8 @@ with st.sidebar.form(key="model_config_form"):
     st.markdown("---")
     st.subheader("卡尔曼滤波器设置")
 
-    rolling_window_options = {"短": 60, "中": 120, "长": 250}
-    default_rw_label = "长"
+    rolling_window_options = {"60日": 60, "120日": 120, "250日": 250}
+    default_rw_label = "250日"
     selected_rolling_window = st.selectbox(
         "滚动窗口",
         options=list(rolling_window_options.keys()),
@@ -120,6 +120,16 @@ with st.sidebar.form(key="model_config_form"):
         help="总交易天数，用于卡尔曼滤波器拟合。短：60天，中：120天，长：250天。建议使用长窗口。"
     )
     params["rolling_window"] = rolling_window_options[selected_rolling_window]
+
+    jump_penalty_options = {"低": 0.0, "中":2.0, "高": 4.0}
+    default_jump_penalty_label = "中"
+    selected_jump_penalty = st.selectbox(
+        "大幅波动惩罚",
+        options=list(jump_penalty_options.keys()),
+        index=list(jump_penalty_options.keys()).index(default_jump_penalty_label),
+        help="大幅波动惩罚，数值越高模型越不信任股价大幅波动。低中高对应数值为0.0，2.5，4.0。"
+    )
+    params["jump_alpha"] = jump_penalty_options[selected_jump_penalty]
 
     with st.expander("进阶设置", expanded=False):
         trend_threshold_options = {"低": 0.0, "中": 0.001, "高": 0.005}
@@ -153,7 +163,7 @@ with st.sidebar.form(key="model_config_form"):
         selected_cycle_snr_threshold = st.selectbox(
             "周期信噪比阈值",
             options=list(cycle_snr_threshold_options.keys()),
-            index=1,
+            index=2,
             help="与趋势振幅相比较，周期振幅须大于此阈值才被视为有效。低中高对应数值为0.2，0.5，0.8。"
         )
         params["cycle_snr_threshold"] = cycle_snr_threshold_options[selected_cycle_snr_threshold]
@@ -176,18 +186,24 @@ with st.sidebar.form(key="model_config_form"):
         )
         params["er_scale"] = er_scale_options[selected_er_scale]
 
-        params["max_R_t_threshold"] = st.number_input(
+        max_R_t_threshold_options = {"低": 3.0, "中": 5.0, "高": 10.0}
+        selected_max_R_t_threshold = st.selectbox(
             "交易量敏感度上限",
-            value=float(params["max_R_t_threshold"]),
-            format="%.2f",
-            help="调整模型对交易量冲击的最高容忍度。推荐数值为1，5，10。"
+            options=list(max_R_t_threshold_options.keys()),
+            index=1,
+            help="调整模型对交易量冲击的最高容忍度。"
         )
-        params["Q_scale_cap"] = st.number_input(
+        params["max_R_t_threshold"] = max_R_t_threshold_options[selected_max_R_t_threshold]
+
+        Q_scale_cap_options = {"低": 3.0, "中": 5.0, "高": 10.0}
+        selected_Q_scale_cap = st.selectbox(
             "趋势信任度上限",
-            value=float(params["Q_scale_cap"]),
-            format="%.2f",
-            help="调整模型对短期趋势信任度的上限。推荐数值为1，3，5。"
+            options=list(Q_scale_cap_options.keys()),
+            index=1,
+            help="调整模型对短期趋势信任度的上限。"
         )
+        params["Q_scale_cap"] = Q_scale_cap_options[selected_Q_scale_cap]
+
         params["slippage"] = st.number_input(
             "交易滑点",
             value=float(params["slippage"]),
@@ -208,7 +224,7 @@ if run_model:
 
     if time_since_last_run < 10.0:
         remaining_time = 10.0 - time_since_last_run
-        st.warning(f"请等待 {remaining_time:.1f} 秒后再运行模型，以防止 API 滥用。")
+        st.warning(f"请等待 {remaining_time:.1f} 秒后再运行模型。")
         st.stop()
 
     st.session_state.last_run_time = current_time
@@ -287,13 +303,53 @@ if run_model:
 
     expected_ret = np.exp(expected_log_ret) - 1
     target_price = real_close * (1 + expected_ret)
+    # ---------------------------------------------------------
+    # 空仓/卖出原因诊断逻辑 (Reason Diagnostics)
+    # ---------------------------------------------------------
+    reason_msg = ""
+    if action == "持有现金/卖出":
+        reasons = []
+        # 提取当前使用的阈值 (对齐底层的对数处理)
+        log_trend_thresh = np.log1p(KALMAN_PARAMS["trend_threshold"])
+        log_cycle_slope_thresh = np.log1p(KALMAN_PARAMS["cycle_slope_threshold"])
+        z_thresh = KALMAN_PARAMS["cycle_z_threshold"]
+        
+        # 提取最新状态
+        curr_trend = latest_row.get("trend_slope", 0)
+        curr_cycle_slope = latest_row.get("cycle_slope", 0)
+        curr_cycle_z = latest_row.get("cycle_z", 0)
+        
+        if is_cycle_alive:
+            # 市场处于周期震荡中，检查哪一项不达标
+            if curr_trend <= log_trend_thresh:
+                reasons.append("主趋势斜率偏弱或正在向下")
+            if curr_cycle_slope <= log_cycle_slope_thresh:
+                reasons.append("短周期动能拐头向下 (处于下跌波段)")
+            if curr_cycle_z >= z_thresh:
+                reasons.append(f"短周期处于超买极值区域 (Z-score: {curr_cycle_z:.2f} 触及极值，防范回调)")
+            if expected_log_ret <= 0:
+                reasons.append("前日超涨，卡尔曼滤波预测次日大概率收跌")
+        else:
+            # 市场失去周期规律，纯看趋势
+            if curr_trend <= log_trend_thresh:
+                reasons.append("市场无明显周期规律，且主趋势偏弱 (未达右侧单边趋势跟随标准)")
+                
+        # 拼接原因
+        if reasons:
+            reason_msg = "；".join(reasons) + "。"
+        else:
+            reason_msg = "处于模型初始化预热期 (Burn-in) 或数据不足。"
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("交易信号", action)
-    col2.metric("目标价格", f"¥{target_price:.2f}")
-    col3.metric("预期回报", f"{expected_ret * 100:.2f}%")
+    col1.metric("次日交易建议", action)
+    col2.metric("次日预期价格", f"¥{target_price:.2f}")
+    col3.metric("次日预期回报", f"{expected_ret * 100:.2f}%")
     col4.metric("当前市场状态", current_regime)
-
+    # 在指标卡片下方显示诊断信息
+    if action == "持有现金/卖出":
+        st.info(f"💡 **未触发买入原因分析**：{reason_msg}")
+    elif action == "买入":
+        st.success("✅ **满足买入条件**：主趋势向上，且短周期动能良好或处于周期底部向上共振阶段。")
     st.markdown("---")
 
     # ==========================================

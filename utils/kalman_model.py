@@ -80,12 +80,14 @@ def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
 
         x_pred = F @ x
         P_pred = F @ P @ F.T + Q
-
+        r_t = y_train[t] - y_train[t - 1] if t > 0 else 0.0
+        jump_score = abs(r_t) / (window_volatility + 1e-8)
+        jump_factor = 1.0 + conf.get("jump_alpha", 4) * max(0.0, jump_score - conf.get("jump_threshold", 2))
         rv = max(float(rvol_train[t]), 1e-6)
         vol_scale = np.sqrt(1.0 / vol_scale_param / rv)
         
         # --- ALIGNED: Apply bounds to R_t ---
-        raw_R_t = r0 * vol_scale
+        raw_R_t = r0 * vol_scale*jump_factor
         R_t = min(max(raw_R_t, MIN_R), MAX_R)
 
         y_pred = float((H @ x_pred).item())
@@ -239,16 +241,17 @@ def run_kalman_filter(
         P_pred = F @ P @ F.T + Q
 
         rv = max(float(rvol[t]), 1e-6)
+        r_t = float(y[t] - y[t - 1]) if t > 0 else 0.0
         vol_scale = np.sqrt(1.0 / vol_scale_param / rv)
-
-        raw_R_t = R0 * vol_scale
+        jump_score = abs(r_t) / (window_volatility + 1e-8)
+        jump_factor = 1.0 + conf.get("jump_alpha", 4) * max(0.0, jump_score - conf.get("jump_threshold", 2))
+        raw_R_t = R0 * vol_scale*jump_factor
         R_t = min(max(raw_R_t, MIN_R), MAX_R)
         used_R[t] = R_t
 
         y_pred = float((H @ x_pred.reshape(-1, 1)).item())
         pred_y_current[t] = y_pred
 
-        r_t = float(y[t] - y[t - 1]) if t > 0 else 0.0
         y_observed = float(y[t])
 
         current_limit = float(limit_pct_values[t])

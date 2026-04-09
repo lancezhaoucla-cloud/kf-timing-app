@@ -18,6 +18,48 @@ def _safe_progress(progress_callback, value: float, text: str | None = None) -> 
     if progress_callback is not None:
         progress_callback(value, text)
 
+def prepare_model_features(df: pd.DataFrame, conf: dict) -> pd.DataFrame:
+    """
+    Recompute profile-dependent model features for the current active config.
+
+    Required input columns:
+    - Close
+    - Volume
+
+    Output columns ensured:
+    - log_close
+    - rvol
+    - er
+    """
+    _validate_required_columns(df, ["Close", "Volume"])
+
+    out = df.copy()
+
+    # 1) log price
+    out["log_close"] = np.log(out["Close"].astype(float))
+
+    # 2) relative volume (profile-dependent)
+    volume_window = int(conf.get("volume_window", 20))
+    if volume_window < 1:
+        raise KalmanModelError(f"Invalid volume_window: {volume_window}")
+
+    vol_ma = out["Volume"].rolling(window=volume_window, min_periods=volume_window).mean()
+    rvol = out["Volume"] / vol_ma
+    out["rvol"] = rvol.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+
+    # 3) efficiency ratio in log space (profile-dependent)
+    er_window = int(conf.get("ER_window", 20))
+    if er_window < 1:
+        raise KalmanModelError(f"Invalid ER_window: {er_window}")
+
+    direction = out["log_close"].diff(er_window).abs()
+    daily_diff_abs = out["log_close"].diff().abs()
+    volatility = daily_diff_abs.rolling(window=er_window, min_periods=er_window).sum()
+
+    er = direction / volatility
+    out["er"] = er.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    return out
 
 def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
     """
@@ -57,6 +99,8 @@ def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
     q_cap = float(conf.get("Q_scale_cap", 5.0))
     er_scale_param = float(conf.get("er_scale", 5.0))
     vol_scale_param = float(conf.get("vol_scale", 5.0))
+    jump_alpha = float(conf.get("jump_alpha", 4.0))
+    jump_threshold = float(conf.get("jump_threshold", 2.0))
 
     # --- ALIGNED: R_t Capping Logic ---
     log_returns = np.diff(y_train)
@@ -81,8 +125,9 @@ def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
         x_pred = F @ x
         P_pred = F @ P @ F.T + Q
         r_t = y_train[t] - y_train[t - 1] if t > 0 else 0.0
+
         jump_score = abs(r_t) / (window_volatility + 1e-8)
-        jump_factor = 1.0 + conf.get("jump_alpha", 4) * max(0.0, jump_score - conf.get("jump_threshold", 2))
+        jump_factor = 1.0 + jump_alpha * max(0.0, jump_score - jump_threshold)
         rv = max(float(rvol_train[t]), 1e-6)
         vol_scale = np.sqrt(1.0 / vol_scale_param / rv)
         
@@ -110,41 +155,56 @@ def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
 
 def optimize_kalman_parameters(df: pd.DataFrame, conf: dict) -> dict:
     """
-    Extract arrays from the dataframe and run L-BFGS-B optimization.
-    Returns a dictionary of optimized parameters.
-    """
-    _validate_required_columns(df, ["er", "log_close", "rvol"])
+    Extract arrays from a feature-prepared dataframe and run L-BFGS-B optimization.
 
-    er_values = df["er"].to_numpy(dtype=float)
+    Expected input:
+    df must already contain:
+    - log_close
+    - rvol
+    - er
+    """
+    _validate_required_columns(df, ["log_close", "rvol", "er"])
+
     y = df["log_close"].to_numpy(dtype=float)
     rvol = df["rvol"].fillna(1.0).to_numpy(dtype=float)
+    er_values = df["er"].fillna(0.0).to_numpy(dtype=float)
 
     if len(y) < 30:
         raise KalmanModelError("Not enough observations for parameter optimization.")
 
+    if not np.all(np.isfinite(y)):
+        raise KalmanModelError("log_close contains non-finite values.")
+    if not np.all(np.isfinite(rvol)):
+        raise KalmanModelError("rvol contains non-finite values.")
+    if not np.all(np.isfinite(er_values)):
+        raise KalmanModelError("er contains non-finite values.")
+
     init_theta = [
-        20.0,
-        np.log(1e-4),
-        np.log(1e-5),
-        np.log(1e-4),
-        np.log(1e-2),
+        20.0,          # cycle days
+        np.log(1e-4),  # q_level
+        np.log(1e-5),  # q_slope
+        np.log(1e-4),  # q_cycle
+        np.log(1e-2),  # r0
     ]
 
     bounds = [
-        (3.0, 60.0),   # cycle days
-        (-16.0, -14.0),# q_level
-        (-16.0, -12.0),# q_slope
-        (-16.0, -10.0),# q_cycle
-        (-8.0, -2.0),  # r0
+        (3.0, 60.0),    # cycle_days
+        (-16.0, -14.0), # q_level
+        (-16.0, -12.0), # q_slope
+        (-16.0, -10.0), # q_cycle
+        (-8.0, -2.0),   # r0
     ]
 
-    res = minimize(
-        kalman_fitness,
-        init_theta,
-        args=(y, rvol, er_values, conf),
-        method="L-BFGS-B",
-        bounds=bounds,
-    )
+    try:
+        res = minimize(
+            kalman_fitness,
+            init_theta,
+            args=(y, rvol, er_values, conf),
+            method="L-BFGS-B",
+            bounds=bounds,
+        )
+    except Exception as e:
+        raise KalmanModelError(f"Kalman parameter optimization crashed: {e}") from e
 
     if not res.success:
         raise KalmanModelError(f"Kalman parameter optimization failed: {res.message}")
@@ -174,7 +234,7 @@ def run_kalman_filter(
 
     df = df.copy()
 
-    er_values = df["er"].to_numpy(dtype=float)
+    er_values = df["er"].fillna(0.0).to_numpy(dtype=float)
     y = df["log_close"].to_numpy(dtype=float)
     rvol = df["rvol"].fillna(1.0).to_numpy(dtype=float)
     limit_pct_values = df["limit_pct"].to_numpy(dtype=float)
@@ -188,6 +248,8 @@ def run_kalman_filter(
     opt_q_slope = float(optimized_params["opt_q_slope"])
     opt_q_cycle = float(optimized_params["opt_q_cycle"])
     opt_r0 = float(optimized_params["opt_r0"])
+
+    profile_name = conf.get("profile_name", "All_other")
 
     rho = float(conf.get("rho", 0.95))
     lam = 2.0 * np.pi / max(opt_cycle_days, 1e-6)
@@ -218,9 +280,11 @@ def run_kalman_filter(
     pred_y_current = np.full(n, np.nan, dtype=float)
     pred_y_next = np.full(n, np.nan, dtype=float)
     used_R = np.zeros(n, dtype=float)
+    local_vol_used = np.zeros(n, dtype=float)
 
-    log_returns = np.diff(y)
-    window_volatility = float(np.std(log_returns)) if len(log_returns) > 1 else 1e-4
+# Global ceiling for R_t
+    log_returns_all = np.diff(y)
+    window_volatility = float(np.std(log_returns_all)) if len(log_returns_all) > 1 else 1e-4
     max_noise_std = window_volatility * float(conf.get("max_R_t_threshold", 5.0))
     MAX_R = max(max_noise_std ** 2, 1e-10)
     MIN_R = float(conf.get("min_R_t", 1e-10))
@@ -228,6 +292,9 @@ def run_kalman_filter(
     q_cap = float(conf.get("Q_scale_cap", 5.0))
     er_scale_param = float(conf.get("er_scale", 5.0))
     vol_scale_param = float(conf.get("vol_scale", 5.0))
+    jump_alpha = float(conf.get("jump_alpha", 2.0))
+    jump_threshold = float(conf.get("jump_threshold", 2.0))
+
 
     for t in range(n):
         if t % 10 == 0 or t == n - 1:
@@ -242,9 +309,15 @@ def run_kalman_filter(
 
         rv = max(float(rvol[t]), 1e-6)
         r_t = float(y[t] - y[t - 1]) if t > 0 else 0.0
+
+
+
         vol_scale = np.sqrt(1.0 / vol_scale_param / rv)
+
+        # Jump adjustment now uses local volatility instead of global window volatility
         jump_score = abs(r_t) / (window_volatility + 1e-8)
-        jump_factor = 1.0 + conf.get("jump_alpha", 4) * max(0.0, jump_score - conf.get("jump_threshold", 2))
+        jump_factor = 1.0 + jump_alpha * max(0.0, jump_score - jump_threshold)
+
         raw_R_t = R0 * vol_scale*jump_factor
         R_t = min(max(raw_R_t, MIN_R), MAX_R)
         used_R[t] = R_t
@@ -282,6 +355,10 @@ def run_kalman_filter(
         pred_y_next[t] = y_next_pred
 
     _safe_progress(progress_callback, 1.0, "Kalman Filter complete.")
+
+    # -------------------------
+    # State outputs
+    # -------------------------
 
     df["kf_level"] = x_filtered[:, 0]
     df["kf_slope"] = x_filtered[:, 1]

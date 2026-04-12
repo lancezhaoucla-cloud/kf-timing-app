@@ -168,7 +168,6 @@ def _engineer_features(
     market_board: str,
     limit_pct: float,
     limit_rule: str,
-    er_window: int,
 ) -> pd.DataFrame:
     """
     Feature engineering for Kalman model input.
@@ -190,22 +189,10 @@ def _engineer_features(
     df["Close_raw"] = df["close_raw"]     # display-facing raw close
     df["Volume"] = df["vol"]
 
-    # Relative volume
-    df["vol_ma20"] = df["Volume"].rolling(20, min_periods=20).mean()
-    df["rvol"] = df["Volume"] / (df["vol_ma20"] + 1e-8)
-
     # Log price for KF
     if (df["Close"] <= 0).any():
         raise DataLoaderError("Encountered non-positive HFQ close price, cannot take log.")
     df["log_close"] = np.log(df["Close"])
-
-    # Kaufman ER
-    df["direction"] = df["log_close"].diff(er_window).abs()
-    df["daily_diff_abs"] = df["log_close"].diff().abs()
-    df["volatility"] = df["daily_diff_abs"].rolling(er_window, min_periods=er_window).sum()
-
-    df["er"] = df["direction"] / (df["volatility"] + 1e-8)
-    df["er"] = df["er"].clip(lower=0.0, upper=1.0)
 
     # Keep NaNs for now; outer function decides final trimming
     return df
@@ -254,11 +241,10 @@ def fetch_kalman_data(
         market_board=market_board,
         limit_pct=limit_pct,
         limit_rule=limit_rule,
-        er_window=er_window,
     )
 
     # Drop only rows that are unusable for the model
-    required_cols = ["Date", "Close", "Close_raw", "Volume", "log_close", "rvol", "er", "limit_pct"]
+    required_cols = ["Date", "Close", "Close_raw", "Volume", "log_close", "limit_pct"]
     df = df.dropna(subset=required_cols).reset_index(drop=True)
 
     # Need enough rows after feature burn-in

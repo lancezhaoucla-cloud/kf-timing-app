@@ -99,7 +99,7 @@ def kalman_fitness(theta, y_train, rvol_train, er_train, conf):
     q_cap = float(conf.get("Q_scale_cap", 5.0))
     er_scale_param = float(conf.get("er_scale", 5.0))
     vol_scale_param = float(conf.get("vol_scale", 5.0))
-    jump_alpha = float(conf.get("jump_alpha", 4.0))
+    jump_alpha = float(conf.get("jump_alpha", 2.0))
     jump_threshold = float(conf.get("jump_threshold", 2.0))
 
     # --- ALIGNED: R_t Capping Logic ---
@@ -167,7 +167,7 @@ def optimize_kalman_parameters(df: pd.DataFrame, conf: dict) -> dict:
 
     y = df["log_close"].to_numpy(dtype=float)
     rvol = df["rvol"].fillna(1.0).to_numpy(dtype=float)
-    er_values = df["er"].fillna(0.0).to_numpy(dtype=float)
+    er_values = df["er"].fillna(0.5).to_numpy(dtype=float)
 
     if len(y) < 30:
         raise KalmanModelError("Not enough observations for parameter optimization.")
@@ -181,7 +181,7 @@ def optimize_kalman_parameters(df: pd.DataFrame, conf: dict) -> dict:
 
     init_theta = [
         20.0,          # cycle days
-        np.log(1e-4),  # q_level
+        np.log(1e-6),  # q_level
         np.log(1e-5),  # q_slope
         np.log(1e-4),  # q_cycle
         np.log(1e-2),  # r0
@@ -402,7 +402,10 @@ def run_kalman_filter(
         ((df["pred_log_close_next"] - df["log_close"]) > 0)
     )
 
-    condition_trend_only = df["trend_slope"] > log_trend_threshold
+    condition_trend_only = (
+        (df["trend_slope"] > log_trend_threshold) &
+        ((df["pred_log_close_next"] - df["log_close"]) > 0)
+    )
 
     long_condition = np.where(df["is_cycle_alive"], condition_with_cycle, condition_trend_only)
     df["signal_long"] = np.where(long_condition, 1, 0)

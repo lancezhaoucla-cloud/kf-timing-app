@@ -41,23 +41,132 @@ setup_chinese_font()
 # ==========================================
 # Streamlit Page Setup
 # ==========================================
-st.set_page_config(page_title="右侧交易助手", layout="wide")
+st.set_page_config(page_title="趋势交易助手", layout="wide")
 
 if "last_run_time" not in st.session_state:
     st.session_state.last_run_time = 0.0
 
-st.title("基于卡尔曼滤波的A股右侧交易助手")
+st.title("基于卡尔曼滤波的A股趋势交易助手")
 
 st.markdown("""
 > **模型简介**：本系统基于状态空间模型（State-Space Model），利用**卡尔曼滤波器**将A股价格动态分解为“底层趋势”与“短波周期”两个隐状态。
 >
 > 底层数学引擎采用MLE（最大似然估计）进行超参数的全局寻优，并深度结合A股微观结构，引入了基于市场环境的动态调节观测噪声及过程噪声，以及针对涨跌停板未释放动能的价格修正机制。
+> 
+> 模型通过多维特征识别市场结构，自动匹配不同交易风格（如趋势跟随、突破追强、防守稳健等），减少调参负担。
 >
-> 模型旨在滤除市场杂音，动态判别市场状态（单边趋势 vs 趋势周期共振），为您提供具备严谨统计学支撑的右侧交易信号。
+> 模型旨在滤除市场杂音，动态判别市场状态（单边趋势 vs 趋势周期共振），为您提供具备严谨统计学支撑的趋势交易信号。
+>
+> 推荐对多支股票同时对比使用，辅助择时判断，把握交易机会。
 """)
 
 st.markdown("---")
 
+# ==========================================
+# 长期回测验证（可折叠 + Tabs）
+# ==========================================
+with st.expander("📊 长期回测案例", expanded=False):
+
+    st.markdown("""
+    该部分展示模型在历史数据上的**样本外表现**，
+    每次交易使用推荐交易风格，用于验证策略在不同市场环境下的稳定性与风险控制能力。使用收盘价到收盘价收益率，不考虑交易费率及滑点。
+    """)
+
+    tabs = st.tabs(["宁德时代（300750.SZ）","贵州茅台（600519.SH）"])
+
+    # ==============================
+    # Tab 1：宁德时代
+    # ==============================
+    with tabs[0]:
+
+        st.subheader("策略 vs 买入并持有（长期表现）")
+
+        st.image("assets/images/300750.png", width="stretch")
+
+        st.markdown("### 📈 样本外统计分析",help="收盘价到收盘价收益率，不考虑交易费率及滑点。",)
+
+        metrics_df = pd.DataFrame({
+            "指标": [
+                "年化收益率", 
+                "年化波动率",
+                "夏普比率",
+                "最大回撤",
+                "胜率（日度）",
+                "持仓时间占比"
+            ],
+            "买入并持有": [
+                "39.16%",
+                "46.02%",
+                "0.95",
+                "-62.88%",
+                "47.72%",
+                "100.00%"
+            ],
+            "策略": [
+                "26.33%",
+                "26.65%",
+                "1.01",
+                "-23.47%",
+                "48.30%",
+                "29.15%"
+            ]
+        })
+
+        st.dataframe(metrics_df, width="stretch")
+
+        st.info("""
+        💡 **解读：**
+        - 策略显著降低了波动率与最大回撤，风险控制能力明显优于买入并持有；
+        - 在牺牲部分收益的前提下，实现了更高的风险调整收益（Sharpe Ratio）；
+        - 持仓时间仅约30%，体现出策略具备明显的择时特征；
+        - 在强趋势牛股（如宁德时代）中，策略可能跑输长期持有，但在震荡或下行环境中更具优势。
+        """)
+    with tabs[1]:
+
+        st.subheader("策略 vs 买入并持有（长期表现）")
+
+        st.image("assets/images/600519.png", width="stretch")
+
+        st.markdown("### 📈 样本外统计分析",help="收盘价到收盘价收益率，不考虑交易费率及滑点。",)
+
+        metrics_df = pd.DataFrame({
+            "指标": [
+                "年化收益率",
+                "年化波动率",
+                "夏普比率",
+                "最大回撤",
+                "胜率（日度）",
+                "持仓时间占比"
+            ],
+            "买入并持有": [
+                "7.74%",
+                "27.63%",
+                "0.41",
+                "-47.48%",
+                "47.66%",
+                "100.00%"
+            ],
+            "策略":[
+                "10.34%",
+                "15.79%",
+                "0.70",
+                "-16.61%",
+                "48.49%",
+                "30.25%"
+            ]
+        })
+
+        st.dataframe(metrics_df, width="stretch")
+
+        st.markdown("### 🧾 最终表现总结")
+
+        st.info("""
+        💡 **解读：**
+        - 相较于买入并持有，策略在贵州茅台上实现了更高的年化收益，同时显著降低了波动率与最大回撤；
+        - 夏普比率由 0.41 提升至 0.70，说明策略不仅提高了收益，也明显改善了风险调整后的表现；
+        - 持仓时间约为30%，体现出模型并非长期满仓，而是更倾向于在趋势占优阶段参与市场，在震荡或下行阶段主动规避风险；
+        - 这说明对于长期慢牛、但中间伴随较大波动的核心资产，趋势交易模型有机会在控制回撤的同时取得优于买入并持有的结果。
+        """)
 
 # ==========================================
 # Helper
@@ -134,12 +243,12 @@ with st.sidebar.form(key="model_config_form"):
     st.subheader("基础设置")
 
     rolling_window_options = {"60日": 60, "120日": 120, "250日": 250}
-    default_rw_label = "250日"
+    default_rw_label = "120日"
     selected_rolling_window = st.selectbox(
         "滚动窗口",
         options=list(rolling_window_options.keys()),
         index=list(rolling_window_options.keys()).index(default_rw_label),
-        help="总交易天数，用于卡尔曼滤波器拟合。短：60天，中：120天，长：250天。建议使用长窗口。"
+        help="总交易天数，用于卡尔曼滤波器拟合。短：60天，中：120天，长：250天。"
     )
     params["rolling_window"] = rolling_window_options[selected_rolling_window]
 
@@ -151,6 +260,15 @@ with st.sidebar.form(key="model_config_form"):
     # -----------------------------
     if style_mode == "推荐交易风格":
         st.info("系统将根据当前市场结构自动识别交易风格。")
+        classifier_window_options = {"20日": 20, "60日": 60, "120日": 120}
+        default_classifier_window_label = "20日"
+        selected_classifier_window = st.selectbox(
+            "市场环境判断周期",
+            options=list(classifier_window_options.keys()),
+            index=list(classifier_window_options.keys()).index(default_classifier_window_label),
+            help="提取周期长度内的市场环境特征，用于判断市场环境。"
+        )
+        params["classifier_window"] = classifier_window_options[selected_classifier_window]
 
     # -----------------------------
     # 模式 2：指定交易风格
@@ -187,16 +305,6 @@ with st.sidebar.form(key="model_config_form"):
             help="大幅波动惩罚，数值越高模型越不信任股价大幅波动。"
         )
         params["jump_alpha"] = jump_penalty_options[selected_jump_penalty]
-
-        classifier_window_options = {"20日": 20, "60日": 60, "120日": 120}
-        default_classifier_window_label = "20日"
-        selected_classifier_window = st.selectbox(
-            "市场环境判断周期",
-            options=list(classifier_window_options.keys()),
-            index=list(classifier_window_options.keys()).index(default_classifier_window_label),
-            help="提取周期长度内的市场环境特征，用于判断市场环境。"
-        )
-        params["classifier_window"] = classifier_window_options[selected_classifier_window]
 
         with st.expander("进阶设置", expanded=True):
             trend_threshold_options = {"极低": -0.005,"低": 0.0, "中": 0.001, "高": 0.005}
@@ -262,7 +370,7 @@ with st.sidebar.form(key="model_config_form"):
                 index=list(er_window_options.keys()).index(default_er_window_label),
                 help="短期趋势窗口，用于计算短期趋势敏感度。"
             )
-            params["er_window"] = er_window_options[selected_er_window]
+            params["ER_window"] = er_window_options[selected_er_window]
 
             er_scale_options = {"低": 1.0, "中": 5.0, "高": 10.0, "极高": 20.0,}
             selected_er_scale = st.selectbox(
@@ -469,6 +577,7 @@ if run_model:
     is_cycle_alive = bool(latest_row.get("is_cycle_alive", False))
     current_regime = "趋势 + 周期回调" if is_cycle_alive else "纯趋势跟踪"
     raw_signal_long = int(latest_row.get("signal_long", 0))
+    raw_action = "买入" if raw_signal_long == 1 else "持有现金/卖出"
 
     pred_log_close_next = latest_row.get("pred_log_close_next", np.nan)
     current_log_close = latest_row.get("log_close", np.nan)
@@ -579,12 +688,15 @@ if run_model:
     # -----------------------------
     # Metrics display
     # -----------------------------
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("次日交易建议", action)
-    col2.metric("次日预期价格", f"¥{target_price:.2f}")
-    col3.metric("次日预期回报", f"{expected_ret_display * 100:.2f}%")
-    col4.metric("当前市场状态", current_regime)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("次日交易建议", action, help = "基于实际收盘价和模型预测价格")
+    col2.metric("模型原始信号", raw_action, help = "基于模型过滤后的收盘价和模型预测价格")
+    col3.metric("次日预期价格", f"¥{target_price:.2f}")
+    col4.metric("次日预期回报", f"{expected_ret_display * 100:.2f}%")
+    col5.metric("当前市场状态", current_regime)
 
+    if raw_action == "买入" and action == "持有现金/卖出":
+        st.warning("⚠️ 模型原始信号为买入，但按原始价格口径计算次日上行空间不足，信号被过滤。")
     if action == "持有现金/卖出":
         st.info(f"💡 **未触发买入原因分析**：{reason_msg}")
     elif action == "买入":
@@ -612,42 +724,57 @@ if run_model:
     # ==========================================
     # 4. Filter Visualizations
     # ==========================================
-    st.subheader("模型可视化")
+    with st.expander("模型可视化", expanded=False):
 
-    z_window = int(active_conf["cycle_z_window"])
+        z_window = int(active_conf["cycle_z_window"])
 
-    # -----------------------------
-    # Chart 1: KF fit in log-price space
-    # -----------------------------
-    fig1, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.plot(df["Date"], df["log_close"], label="对数收盘价(HFQ)", color="black", linestyle="--", alpha=0.7)
-    ax1.plot(df["Date"], df["kf_level"], label="趋势", linewidth=2.5)
-    ax1.plot(df["Date"], df["trend_plus_cycle"], label="趋势 + 周期拟合", linewidth=2, alpha=0.7)
-    ax1.set_title("趋势 + 周期卡尔曼滤波")
-    ax1.legend()
-    ax1.grid(True)
-    st.pyplot(fig1)
-    plt.close(fig1)
+        # -----------------------------
+        # Chart 1: KF fit in log-price space
+        # -----------------------------
+        fig1, ax1 = plt.subplots(figsize=(10, 4))
+        ax1.plot(df["Date"], df["log_close"], label="对数收盘价(后复权)", color="black", linestyle="--", alpha=0.7)
+        ax1.plot(df["Date"], df["kf_level"], label="趋势", linewidth=2.5)
+        ax1.plot(df["Date"], df["trend_plus_cycle"], label="趋势 + 周期拟合", linewidth=2, alpha=0.7)
+        ax1.set_title("趋势 + 周期卡尔曼滤波")
+        ax1.legend()
+        ax1.grid(True)
+        st.pyplot(fig1)
+        plt.close(fig1)
 
-    # -----------------------------
-    # Chart 2: Cycle component
-    # -----------------------------
-    fig2, ax2 = plt.subplots(figsize=(10, 4))
-    ax2.plot(df["Date"], df["kf_cycle"], label="周期")
-    ax2.axhline(0, color="black", linestyle="--")
-    ax2.set_title(f"周期卡尔曼滤波 (周期天数={optimized_params['opt_cycle_days']:.2f})")
-    ax2.legend()
-    ax2.grid(True)
-    st.pyplot(fig2)
-    plt.close(fig2)
+        # -----------------------------
+        # Chart 2: Cycle component
+        # -----------------------------
+        fig2, ax2 = plt.subplots(figsize=(10, 4))
+        ax2.plot(df["Date"], df["kf_cycle"], label="周期")
+        ax2.axhline(0, color="black", linestyle="--")
+        ax2.set_title(f"周期卡尔曼滤波 (周期天数={optimized_params['opt_cycle_days']:.2f})")
+        ax2.legend()
+        ax2.grid(True)
+        st.pyplot(fig2)
+        plt.close(fig2)
 
-    # -----------------------------
-    # Chart 3: Strategy NAV vs Buy & Hold
-    # Use post-burn-in aligned sample
-    # -----------------------------
-    if len(df) <= z_window:
-        st.warning("样本不足，无法绘制策略净值图。")
-    else:
+        # -----------------------------
+        # Chart 3: Strategy NAV vs Buy & Hold
+        # Use post-burn-in aligned sample
+        # -----------------------------
+        if len(df) <= z_window:
+            st.warning("样本不足，无法绘制策略净值图。")
+        else:
+            ret_cols = ["stock_ret_today", "strategy_ret_today_after_cost"]
+            aligned = df.iloc[z_window:].dropna(subset=ret_cols).copy()
+
+            if len(aligned) == 0:
+                st.warning("有效样本不足，无法绘制策略净值图。")
+            else:
+                aligned["bh_nav"] = (1.0 + aligned["stock_ret_today"]).cumprod()
+                aligned["strat_nav"] = (1.0 + aligned["strategy_ret_today_after_cost"]).cumprod()
+                aligned["excess_nav"] = aligned["strat_nav"] / aligned["bh_nav"] - 1.0
+
+                fig3, ax3 = plt.subplots(figsize=(10, 4))
+                ax3.plot(aligned["Date"], aligned["bh_nav"], label="买入并持有", color="C0")
+                ax3.plot(aligned["Date"], aligned["strat_nav"], label="策略（非真实交易模拟）", color="C2")
+                ax3.set_ylabel("单位净值 (初始为1)")
+                ax3.set_title("策略 vs 买入并持有")
         ret_cols = ["stock_ret_today", "strategy_ret_today_after_cost"]
         aligned = df.iloc[z_window:].dropna(subset=ret_cols).copy()
 
@@ -690,7 +817,7 @@ if run_model:
     # ==========================================
     # 5. Evaluation Metrics
     # ==========================================
-    st.subheader("回测表现（非真实交易模拟）")
+    st.subheader("模型原始信号回测表现（非真实交易模拟）")
 
     z_window = int(active_conf["cycle_z_window"])
     ret_cols = ["stock_ret_today", "strategy_ret_today_after_cost"]
@@ -726,5 +853,5 @@ if run_model:
             )
 
             col_a, col_b = st.columns(2)
-            col_a.metric("胜率", f"{hit_ratio * 100:.2f}%" if pd.notna(hit_ratio) else "N/A")
-            col_b.metric("平均日换手率", f"{avg_turnover * 100:.2f}%" if pd.notna(avg_turnover) else "N/A")
+            col_a.metric("胜率", f"{hit_ratio * 100:.2f}%" if pd.notna(hit_ratio) else "N/A",help="模型预测次日涨跌方向与实际涨跌方向一致的比例。")
+            col_b.metric("平均日调仓幅度", f"{avg_turnover * 100:.2f}%" if pd.notna(avg_turnover) else "N/A",help="策略每日仓位变动的平均幅度（0→1 为满仓买入，1→0 为清仓卖出）。")

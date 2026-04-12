@@ -3,7 +3,7 @@ from datetime import datetime
 # ==========================================
 # Default Application Settings
 # ==========================================
-DEFAULT_TICKER = "600519.sh"
+DEFAULT_TICKER = "300750.sz"
 DEFAULT_END_DATE = datetime.today().strftime('%Y%m%d')
 
 # ==========================================
@@ -15,7 +15,8 @@ KALMAN_PARAMS = {
     "cycle_slope_threshold": 0.0,
     "cycle_z_threshold": 3,
     "cycle_z_window": 20,         # Minimum 20 days for peak judgment
-    "ER_window": 20,              # Efficiency ratio calculation window
+    "ER_window": 20,
+    "volume_window": 120,             # Relative volume calculation window
     "slippage": 0.000,
     "vol_scale": 10,
     "er_scale": 10,

@@ -59,7 +59,8 @@ The system decomposes price dynamics into **trend** and **cycle components**, ro
 ### UI & Deployment
 - 🌐 **Streamlit Dashboard**
   - Chinese-language interface with embedded Noto Sans SC font
-  - Sidebar form for ticker, date, rolling window (60 / 120 / 250 days), and style settings
+  - Automatic Tushare stock/index detection from the entered code
+  - Sidebar form for instrument code, date, rolling window (60 / 120 / 250 days), and style settings
   - Collapsible model visualizations (trend/cycle decomposition, NAV vs. buy & hold, excess return)
   - 10-second cooldown between model runs (API rate protection)
 
@@ -107,7 +108,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app will open in your browser. Enter a stock ticker (e.g. `600519.sh`) and click **运行模型**.
+The app will open in your browser. Enter a Tushare stock code (e.g. `600519.SH`)
+or index code (e.g. `000001.SH` or `000300.CSI`) and click **运行模型**.
+The app checks `stock_basic` and then `index_basic` to select the appropriate
+daily data endpoint automatically. ETFs and funds are not supported.
 
 ---
 
@@ -125,7 +129,9 @@ TUSHARE_TOKEN = "your_token_here"
 
 For Streamlit Cloud deployment, configure secrets in the web UI instead.
 
-A valid [Tushare Pro](https://tushare.pro/) token is required for live A-share data.
+A valid [Tushare Pro](https://tushare.pro/) token is required for live A-share
+data. Index requests use `index_basic` and `index_daily`; your token must have
+permission to access those endpoints.
 
 ---
 
@@ -137,7 +143,7 @@ KF_Timing_App/
 ├── config.py                   # Default params, profile configs, build_profile_config()
 ├── requirements.txt
 ├── utils/
-│   ├── data_loader.py          # Tushare data fetch, validation, limit rules
+│   ├── data_loader.py          # Tushare stock/index fetch, validation, limit rules
 │   ├── kalman_model.py         # Feature prep, MLE optimization, Kalman filter
 │   └── profile_selector.py     # Market structure classifier & profile routing
 ├── assets/

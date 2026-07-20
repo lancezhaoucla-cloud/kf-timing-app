@@ -224,9 +224,9 @@ st.sidebar.markdown("---")
 
 with st.sidebar.form(key="model_config_form"):
     ticker = st.text_input(
-        "股票代码",
+        "股票 / 指数代码",
         value=DEFAULT_TICKER,
-        help="股票代码 (例: 600549.sh)，不支持指数、ETF、基金等其它证券类型。"
+        help="Tushare 股票或指数代码（例：600549.SH、000001.SH），系统会自动识别类型。"
     )
 
     end_date = st.text_input(

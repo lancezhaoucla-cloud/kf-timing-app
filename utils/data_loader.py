@@ -22,10 +22,12 @@ def validate_inputs(
     Validate user inputs.
     Raises DataLoaderError if validation fails.
     """
-    if not isinstance(ts_code, str) or not re.match(r"^\d{6}\.(sh|sz|bj)$", ts_code, re.IGNORECASE):
+    if not isinstance(ts_code, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", ts_code.strip()
+    ):
         raise DataLoaderError(
-            "Invalid ticker format. Use 'XXXXXX.sh', 'XXXXXX.sz', or 'XXXXXX.bj' "
-            "(e.g. '600549.sh')."
+            "Invalid Tushare code format. Use '<code>.<market>' "
+            "(e.g. '600549.SH' or '000001.SH')."
         )
 
     if not isinstance(end_date_str, str):
@@ -84,6 +86,40 @@ def _fetch_stock_basic(pro, ts_code: str) -> tuple[str, str, float, str]:
     market_board = str(basic_info["market"].iloc[0])
     limit_pct, limit_rule = infer_limit_rule(company_name, market_board)
     return company_name, market_board, limit_pct, limit_rule
+
+
+def _detect_instrument(pro, ts_code: str) -> tuple[str, str, str, float, str]:
+    """
+    Detect whether a Tushare code is a stock or index and return its metadata.
+
+    Stocks take precedence if a code is unexpectedly present in both metadata
+    endpoints. Index rows retain the existing fallback limit fields so the
+    downstream model contract remains unchanged.
+    """
+    stock_info = pro.stock_basic(
+        ts_code=ts_code,
+        fields="ts_code,name,market",
+    )
+    if stock_info is not None and not stock_info.empty:
+        company_name = str(stock_info["name"].iloc[0])
+        market_board = str(stock_info["market"].iloc[0])
+        limit_pct, limit_rule = infer_limit_rule(company_name, market_board)
+        return "stock", company_name, market_board, limit_pct, limit_rule
+
+    index_info = pro.index_basic(
+        ts_code=ts_code,
+        market="",
+        fields="ts_code,name,market",
+    )
+    if index_info is None or index_info.empty:
+        raise DataLoaderError(
+            f"No stock or index metadata found for {ts_code}. "
+            "Check the Tushare code and your API permissions."
+        )
+
+    index_name = str(index_info["name"].iloc[0])
+    index_market = str(index_info["market"].iloc[0])
+    return "index", index_name, index_market, 0.095, "10%"
 
 
 def _safe_history_start_date(end_date_str: str, rolling_window: int, er_window: int) -> str:
@@ -161,6 +197,56 @@ def _fetch_price_data(pro, ts_code: str, start_date_str: str, end_date_str: str)
     return df
 
 
+def _fetch_index_price_data(
+    pro,
+    ts_code: str,
+    start_date_str: str,
+    end_date_str: str,
+) -> pd.DataFrame:
+    """
+    Fetch unadjusted index bars and normalize them to the stock data schema.
+    """
+    index_data = pro.index_daily(
+        ts_code=ts_code,
+        start_date=start_date_str,
+        end_date=end_date_str,
+        fields="ts_code,trade_date,open,high,low,close,pre_close,vol,amount",
+    )
+    if index_data is None or index_data.empty:
+        raise DataLoaderError(
+            f"No index daily data found for {ts_code} up to {end_date_str}."
+        )
+
+    required = [
+        "trade_date", "open", "high", "low", "close", "pre_close", "vol", "amount"
+    ]
+    missing = [column for column in required if column not in index_data.columns]
+    if missing:
+        raise DataLoaderError(
+            f"Index daily data for {ts_code} is missing fields: {', '.join(missing)}."
+        )
+
+    index_data = index_data.sort_values("trade_date").reset_index(drop=True)
+    df = index_data[required].rename(
+        columns={
+            "open": "open_hfq",
+            "high": "high_hfq",
+            "low": "low_hfq",
+            "close": "close_hfq",
+            "pre_close": "pre_close_hfq",
+        }
+    )
+
+    # Indices have no corporate-action adjustment, so raw and model prices match.
+    df["open_raw"] = df["open_hfq"]
+    df["high_raw"] = df["high_hfq"]
+    df["low_raw"] = df["low_hfq"]
+    df["close_raw"] = df["close_hfq"]
+    df["pre_close_raw"] = df["pre_close_hfq"]
+    df["Date"] = pd.to_datetime(df["trade_date"])
+    return df
+
+
 def _engineer_features(
     df: pd.DataFrame,
     ts_code: str,
@@ -217,9 +303,16 @@ def fetch_kalman_data(
     Raises DataLoaderError on failure.
     """
     validate_inputs(ts_code, end_date_str, rolling_window, er_window)
+    ts_code = ts_code.strip().upper()
 
     pro = get_tushare_pro(tushare_token)
-    company_name, market_board, limit_pct, limit_rule = _fetch_stock_basic(pro, ts_code)
+    (
+        instrument_type,
+        company_name,
+        market_board,
+        limit_pct,
+        limit_rule,
+    ) = _detect_instrument(pro, ts_code)
 
     start_date_str = _safe_history_start_date(
         end_date_str=end_date_str,
@@ -227,12 +320,20 @@ def fetch_kalman_data(
         er_window=er_window,
     )
 
-    df = _fetch_price_data(
-        pro=pro,
-        ts_code=ts_code,
-        start_date_str=start_date_str,
-        end_date_str=end_date_str,
-    )
+    if instrument_type == "index":
+        df = _fetch_index_price_data(
+            pro=pro,
+            ts_code=ts_code,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+        )
+    else:
+        df = _fetch_price_data(
+            pro=pro,
+            ts_code=ts_code,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+        )
 
     df = _engineer_features(
         df=df,
